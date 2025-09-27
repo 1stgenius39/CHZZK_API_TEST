@@ -11,8 +11,10 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "dotenv": "^17.2.1",
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
     "node-fetch": "^3.3.2",
-    "socket.io-client": "2.5"
+    "open": "^10.2.0",
+    "socket.io-client": "^2.0.3"
   }
 }
