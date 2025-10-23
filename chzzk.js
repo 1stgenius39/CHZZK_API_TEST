@@ -9,10 +9,44 @@ import open from 'open'
 import { URL as UrlParser, fileURLToPath } from 'url'
 import path from 'path'
 import fetch from 'node-fetch'
-import io from 'socket.io-client'
+import ioClient from 'socket.io-client'
+import { Server as SocketIoServer } from 'socket.io' // 오버레이 서버를 위해 추가
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+// --- 오버레이를 위한 웹 서버 및 웹소켓 설정 ---
+const app = express();
+const server = http.createServer(app);
+const io = new SocketIoServer(server); // socket.io 서버 생성
+const PORT = 3002;
+
+// chat-overlay.html 파일 제공
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'chatbox-overlay.html'));
+});
+
+// jumpsuji.png와 같은 로컬 이미지 파일 제공
+app.use(express.static(__dirname));
+
+io.on('connection', (socket) => {
+  console.log('✅ 오버레이가 서버에 연결되었습니다.');
+  socket.on('disconnect', () => {
+    console.log('❌ 오버레이 연결이 끊겼습니다.');
+  });
+});
+// --- 서버 설정 끝 ---
+
+// --- ✨ 블랙리스트 설정 (여기에 차단할 닉네임을 추가하세요) ---
+const blacklist = new Set([
+    '빵떡',
+    '스팸봇_01',
+    '비매너채팅'
+]);
+// ---------------------------------------------------------
+
+
+
 
 function nowSec(){ return Math.floor(Date.now()/1000) }
 function isTokenValid(){
@@ -33,11 +67,11 @@ async function startChzzkSession() {
     }
   });
   const authJson = await authRes.json();
-  const sessionUrl = authJson.content.url;  // 예: https://ssioXX.nchat.naver.com:443?auth=…
+  const sessionUrl = authJson.content.url;
   console.log("authRes : " +JSON.stringify(authJson, null, 2));
 
-  // 2) Socket.IO 연결 (WebSocket 전용)
-  const socket = io(sessionUrl, {
+  // 2) 치지직 Socket.IO 연결 (웹소켓 전용)
+  const chzzkSocket = ioClient(sessionUrl, { // 혼동을 피하기 위해 chzzkSocket으로 이름 변경
     transports: ['websocket'],
     forceNew: true,
     reconnection: false,
@@ -45,34 +79,28 @@ async function startChzzkSession() {
     timeout: 5000
   });
 
-  socket.on('error', async(msg)=>{
-
+  chzzkSocket.on('error', async(msg)=>{
     const payload = (typeof msg === 'string') ? JSON.parse(msg) : msg;
     console.error("connection error!!" + msg);
   });
 
-  socket.on('connect', () => {
+  chzzkSocket.on('connect', () => {
     const info = {
-      id:              socket.id,
-      connected:       socket.connected,
+      id:              chzzkSocket.id,
+      connected:       chzzkSocket.connected,
       sessionUrl:      authJson.content.url,
-      protocol:        socket.io.engine.protocol,         // EIO 버전
-      transport:       socket.io.engine.transport.name,   // websocket or polling
-      path:            socket.io.opts.path,               // '/socket.io'
-      query:           socket.io.engine.transport.query,  // auth, t 등
-      sessionKey:      socket.io.engine.transport.query.auth, // auth 토큰
-      finalUrl:        socket.io.engine.transport.ws.url
+      protocol:        chzzkSocket.io.engine.protocol,
+      transport:       chzzkSocket.io.engine.transport.name,
+      path:            chzzkSocket.io.opts.path,
+      query:           chzzkSocket.io.engine.transport.query,
+      sessionKey:      chzzkSocket.io.engine.transport.query.auth,
+      finalUrl:        chzzkSocket.io.engine.transport.ws.url
     };
     console.log(JSON.stringify(info, null, 2));
-    console.log("secure : " + socket.io.opts.secure);        // secure 옵션(true/false)
-    console.log(socket.io.engine.transport.name); // 'websocket'
-    console.log(socket.io.opts.transports);     // ['websocket']
-
   });
 
   // 4) SYSTEM 이벤트 처리
-  socket.on('SYSTEM', async (msg) => {
-    // msg가 문자열이면 파싱
+  chzzkSocket.on('SYSTEM', async (msg) => {
     const payload = (typeof msg === 'string') ? JSON.parse(msg) : msg;
     console.log('◼ SYSTEM event:', payload);
 
@@ -81,7 +109,7 @@ async function startChzzkSession() {
       console.log('  ↳ sessionKey =', sessionKey);
 
       // 4-a) 채팅 이벤트 구독
-      const chatSubRes = await fetch(
+      await fetch(
         `https://openapi.chzzk.naver.com/open/v1/sessions/events/subscribe/chat?sessionKey=${sessionKey}`,
         { method: 'POST', headers: { 'Authorization': `Bearer ${BEARER_TOKEN}`, 'Content-Type': 'application/json' } }
       );
@@ -93,35 +121,54 @@ async function startChzzkSession() {
       );
       console.log(' ↳ donation subscribe:', await donationSubRes.json());
 
-
       // 5) CHAT / DONATION 이벤트 바인딩
-      socket.on('CHAT', (chatMsg) => {
-        // chatMsg도 문자열일 수 있으니 필요시 JSON.parse
+      chzzkSocket.on('CHAT', (chatMsg) => {
         const chat = (typeof chatMsg === 'string') ? JSON.parse(chatMsg) : chatMsg;
         const nickname = chat.profile?.nickname;
         const content = chat.content;
-        // console.log('💬 CHAT event:', chat);
-        if (nickname && content) {
-            console.log(`[${nickname}] ${content}`);
-        }
-        //여기에 일천 넣고싶은거 넣어서 쓰셈
-        if(content.includes("쯔모"))
-        {
-            console.log("일천바보");
+        
+
+        if (blacklist.has(nickname)) {
+         
+            return; // 함수를 여기서 종료하여 오버레이로 메시지를 보내지 않음
         }
 
+
+     if (nickname && content) {
+        console.log(`💬 [${nickname}] ${content}`);
+        // ✨ 변경됨: 닉네임과 메시지를 객체 형태로 전송
+        io.emit('new-chat', {
+            nickname: nickname,
+            message: content
+        }); 
+    }
       });
-      socket.on('DONATION', (donationMsg) => {
+      chzzkSocket.on('DONATION', (donationMsg) => {
         const don = (typeof donationMsg === 'string') ? JSON.parse(donationMsg) : donationMsg;
         console.log('🎁 DONATION event:', don);
+
+
+     // ✨ 변경됨: '슛' 메시지를 감지하고 별도의 이벤트 전송
+        if (don.donationText && don.donationText.trim() === '슛') {
+            console.log("🔫 '슛' 명령 감지! 오버레이로 명령 전송.");
+            io.emit('shoot-command');
+        } else if (don.payAmount && don.donationText) {
+            const donationData = {
+                amount: don.payAmount,
+                message: don.donationText,
+                nickname: don.donatorNickname
+            };
+            io.emit('new-donation', donationData);
+        }
+        // ---
       });
     }
   });
 
-  socket.on('connect_error', (err) => {
+  chzzkSocket.on('connect_error', (err) => {
     console.error('⚠ connect_error', err);
   });
-  socket.on('disconnect', (reason) => {
+  chzzkSocket.on('disconnect', (reason) => {
     console.log('⚠ disconnected', reason);
   });
 }
@@ -134,7 +181,7 @@ export async function GetCode(opts={}){
 
   const ru = new UrlParser(redirectUri)
   const host = ru.hostname
-  const port = Number(ru.port || (ru.protocol === 'https:' ? 443 : 80))
+  const port = Number(ru.port || (ru.protocol === 'https' ? 443 : 80))
   const pathName = ru.pathname
 
   const state = providedState || crypto.randomBytes(16).toString('base64url')
@@ -143,12 +190,12 @@ export async function GetCode(opts={}){
   accountUrl.searchParams.set('redirectUri', redirectUri)
   accountUrl.searchParams.set('state', state)
 
-  const app = express()
-  const server = http.createServer(app)
+  const authApp = express() // 인증용으로 임시 express 앱 사용
+  const authServer = http.createServer(authApp)
 
   const wait = new Promise((resolve, reject)=>{
-    const timer = setTimeout(()=>{ try{server.close()}catch{}; reject(new Error('timeout')) }, timeoutMs)
-    app.get(pathName, (req, res)=>{
+    const timer = setTimeout(()=>{ try{authServer.close()}catch{}; reject(new Error('timeout')) }, timeoutMs)
+    authApp.get(pathName, (req, res)=>{
       const { code, state:returnedState } = req.query
       if(!code || !returnedState || returnedState !== state){
         res.status(400).send('invalid state/code')
@@ -156,19 +203,10 @@ export async function GetCode(opts={}){
       }
       res.status(200).send('OK. You can close this window.')
       clearTimeout(timer); resolve({ code:String(code), state:String(returnedState) })
-      setTimeout(()=>{ try{server.close()}catch{} }, 50)
+      setTimeout(()=>{ try{authServer.close()}catch{} }, 50)
     })
-
-    app.use((req, res, next) => {
-        console.log(`[DEBUG] Incoming request path: ${req.path}`);
-        console.log(`[DEBUG] Expected path: ${pathName}`);
-        // 이 로그를 보고 두 경로가 다른지 확인!
-        res.status(404).send(`Path mismatch. Received ${req.path} but expected ${pathName}`);
-        try{server.close()}catch{}; 
-        reject(new Error('Path mismatch'));
-    });    
     
-    server.listen(port, host, ()=>{
+    authServer.listen(port, host, ()=>{
       if(openBrowser) open(accountUrl.toString())
     })
   })
@@ -178,15 +216,10 @@ export async function GetCode(opts={}){
 
 async function getToken(authorizationCode, stateValue) {
   const tokenUrl = 'https://openapi.chzzk.naver.com/auth/v1/token';
-
   const clientId = process.env.CHZZK_CLIENT_ID;
-  const clientSecret = process.env.CHZZK_CLIENT_SECRET; // .env 파일에 추가해야 합니다.
+  const clientSecret = process.env.CHZZK_CLIENT_SECRET;
+  if (!clientSecret) throw new Error('missing CLIENT_SECRET');
 
-  if (!clientSecret) {
-    throw new Error('missing CLIENT_SECRET');
-  }
-
-  // 요청 Body 구성
   const payload = {
     grantType: 'authorization_code',
     clientId: clientId,
@@ -196,63 +229,53 @@ async function getToken(authorizationCode, stateValue) {
   };
 
   try {
-    // fetch API를 사용한 POST 요청
     const response = await fetch(tokenUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json', // API 스펙에 따라 'application/x-www-form-urlencoded' 일 수도 있습니다.
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-
     const tokens = await response.json();
-
     if (!response.ok) {
-      // API가 에러를 반환한 경우
       console.error('Failed to get token:', tokens);
       throw new Error(tokens.message || 'An unknown error occurred');
     }
-
-    console.log('Successfully received tokens:', tokens);
-    // { accessToken: '...', refreshToken: '...', tokenType: 'Bearer', expiresIn: ... }
     return tokens;
-
   } catch (error) {
     console.error('Error in getToken:', error);
     throw error;
   }
 }
 
-
 // --- 전체 실행 흐름 ---
 async function main() {
   try {
-    console.log('Step 1: Getting authorization code...');
+    // 오버레이용 서버를 먼저 실행
+    server.listen(PORT, () => {
+      console.log(`🚀 오버레이 서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
+      console.log('OBS/XSplit 등 방송 프로그램의 브라우저 소스에 위 주소를 입력하세요.');
+    });
+
+    console.log('\n1단계: 인증 코드 받는 중...');
     const { code, state } = await GetCode();
-    console.log(`Step 1 Success! Code: ${code}`);
+    console.log(`1단계 성공! Code: ${code}`);
 
-    console.log('\nStep 2: Exchanging code for access token...');
+    console.log('\n2단계: 액세스 토큰으로 교환 중...');
     const tokenInfo = await getToken(code, state);
-
     if (!tokenInfo || !tokenInfo.content.accessToken) {
-        throw new Error('Failed to retrieve a valid access token.');
+        throw new Error('유효한 액세스 토큰을 받지 못했습니다.');
     }
-    
-
-    console.log(`Step 2 Success! Access Token: ${tokenInfo.content.accessToken}`);
-
+    console.log(`2단계 성공! Access Token 확인.`);
     process.env.CHZZK_BEARER = tokenInfo.content.accessToken;
 
-    console.log('\nStep 3: Starting Chzzk session...');
+    console.log('\n3단계: 치지직 세션 시작 중...');
     await startChzzkSession();
+    console.log('\n🎉 모든 시스템 준비 완료! 치지직 채팅 메시지를 기다립니다.');
 
   } catch (error) {
-    console.error('\nAuthentication process failed:', error.message);
+    console.error('\n인증 과정 실패:', error.message);
+    // 인증 실패 시 서버 종료
+    server.close();
   }
 }
 
 main();
-
-
-//startChzzkSession().catch(console.error);
-

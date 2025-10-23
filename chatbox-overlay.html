@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>채팅창 오버레이</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@200..900&display=swap" rel="stylesheet">
+    <style>
+        /* 기본 설정 */
+        body {
+            margin: 0;
+            background-color: transparent;
+            font-family: "Noto Serif KR", serif;
+            overflow: hidden;
+        }
+
+        /* 채팅 로그 전체 컨테이너 */
+        #chat-log-container {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            width: 400px;
+            max-height: 70%;
+            display: flex;
+            flex-direction: column;
+            pointer-events: none;
+            justify-content: flex-end;
+        }
+
+        /* 개별 채팅 메시지 한 줄 스타일 */
+        .chat-line {
+            background-color: rgba(20, 20, 20, 0.7);
+            color: white;
+            font-size: 25px;
+            font-weight: 500;
+            padding: 8px 14px;
+            margin-top: 6px;
+            border-radius: 8px;
+            word-wrap: break-word;
+            animation: fadeInSlideUp 0.3s ease-out forwards;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        /* 이미지 크기 제한 및 텍스트와의 간격 설정 */
+        .chat-line img {
+            max-width: 60px;
+            max-height: 60px;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+
+        /* 단일 이모티콘만 있을 때의 특별 스타일 */
+        .chat-line.single-emote-line {
+            background-color: transparent;
+            padding: 0;
+            justify-content: center;
+        }
+
+        /* 단일 이모티콘 이미지 크기를 더 크게 설정 */
+        .chat-line.single-emote-line img {
+            max-width: 250px;
+            max-height: 250px;
+            margin-right: 0;
+        }
+
+        /* 새 메시지가 나타날 때의 애니메이션 정의 */
+        @keyframes fadeInSlideUp {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div id="chat-log-container"></div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const chatContainer = document.getElementById('chat-log-container');
+        const MAX_MESSAGES = 50;
+        const socket = io();
+
+        // { } 안에 있는 이모티콘 목록
+        const allowedImages = {
+         '1stgE': 'png', '1stgQ': 'png', '1stgW': 'png', '1stgR': 'png',
+                '1stgT': 'png', '1stgY': 'png', '1stgU': 'png', '1stgI': 'png',
+                '1stgA': 'png', '1stgS': 'png', '1stgSp': 'png', '1stgGurung': 'png',
+                '1stgDda': 'png', '1stgGwag': 'png', '1stgPe1': 'png', '1stgPe2': 'gif',
+                '1stgGlo': 'gif', 
+                
+                
+                '1stgGgang': 'png', 
+
+                'd_46': 'gif', 
+                'd_126': 'png', 
+                'd_60': 'gif', 
+                'd_54': 'gif', 
+                'd_45': 'gif', 
+                'd_59': 'gif', 
+                'd_44': 'gif', 
+                'd_58': 'png', 
+
+                'd_90': 'png', 
+                'd_55': 'png', 
+                'd_56': 'gif', 
+                'd_73': 'png', 
+                'd_108': 'png', 
+                '1stgGgang': 'png', 
+                '1stgHi': 'gif', 
+                '1stgBye': 'gif', 
+                '1stgGong': 'png', 
+
+                
+                '1stgIchihime': 'gif'
+        };
+
+        // ✨ 추가: 특정 단어와 이미지 파일명을 직접 연결하는 목록
+        // 여기에 원하는 단어와 이미지 파일명을 추가하거나 수정하세요.
+        const keywordImages = {
+            '찬성': '1stgE.png',
+            '마법': '1stgS.png',
+            '유국': '1stgA.png',
+
+            '위증': '1stgQ.png',
+            '질문': '1stgR.png',
+            '리치': '1stgT.png',
+            '론': '1stgU.png',
+
+            '반론': '1stgW.png',
+
+            '증거': '1stgY.png',
+
+            '아내':'아내.png',
+            '이거보여주려고어그로끌었다':'이거.png',
+            '점프스지':'jumpsuji.png',
+            '호곡':'호곡.png',
+            '범인은너야':'범인은너야.png',
+            '와정말요':'와정말요.png',
+            '!!':'탁월수.png',
+            '쯔모': '1stgI.png'
+          
+            // 예시: '반가워': 'welcome.gif'
+        };
+
+        socket.on('new-chat', (data) => {
+            addChatMessage(data.message);
+        });
+
+        function addChatMessage(message) {
+            const chatLine = document.createElement('div');
+            chatLine.className = 'chat-line';
+
+            const trimmedMessage = message.trim();
+            const imageTagRegex = /^{:(\w+):}$/;
+            let isSingleEmote = false;
+
+            // 1. 단일 키워드 이모티콘인지 확인
+            if (keywordImages[trimmedMessage]) {
+                isSingleEmote = true;
+            }
+            // 2. 단일 {:태그:} 이모티콘인지 확인
+            else {
+                const imageMatch = trimmedMessage.match(imageTagRegex);
+                if (imageMatch && allowedImages[imageMatch[1]]) {
+                    isSingleEmote = true;
+                }
+            }
+
+            if (isSingleEmote) {
+                chatLine.classList.add('single-emote-line');
+            }
+
+            // ✨ 수정: 키워드와 {:태그:}를 모두 인식하기 위한 정규식 생성
+            const keywordRegexPart = Object.keys(keywordImages)
+                .map(key => key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) // 정규식 특수문자 이스케이프
+                .join('|');
+            
+            const splitRegex = new RegExp(`({:\\w+:})|(${keywordRegexPart})`, 'g');
+            const parts = message.split(splitRegex).filter(part => part); // 빈 문자열 제거
+
+            let hasContent = false;
+            parts.forEach(part => {
+                const tagMatch = part.match(imageTagRegex);
+
+                // Case 1: {:태그:} 형식의 이모티콘
+                if (tagMatch && allowedImages[tagMatch[1]]) {
+                    const imageName = tagMatch[1];
+                    const imageType = allowedImages[imageName];
+                    const imageUrl = `${imageName}.${imageType}`;
+                    const imageElement = document.createElement('img');
+                    imageElement.src = imageUrl;
+                    chatLine.appendChild(imageElement);
+                    hasContent = true;
+                }
+                // Case 2: 키워드 형식의 이모티콘
+                else if (keywordImages[part]) {
+                    const imageUrl = keywordImages[part];
+                    const imageElement = document.createElement('img');
+                    imageElement.src = imageUrl;
+                    chatLine.appendChild(imageElement);
+                    hasContent = true;
+                }
+                // Case 3: 일반 텍스트
+                else {
+                    const textElement = document.createElement('span');
+                    textElement.textContent = part;
+                    chatLine.appendChild(textElement);
+                    hasContent = true;
+                }
+            });
+
+            if (hasContent) {
+                chatContainer.appendChild(chatLine);
+                if (chatContainer.children.length > MAX_MESSAGES) {
+                    chatContainer.removeChild(chatContainer.firstChild);
+                }
+            }
+        }
+    </script>
+</body>
+</html>
